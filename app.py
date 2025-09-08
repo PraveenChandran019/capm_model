@@ -1,11 +1,9 @@
-from typing import Optional, Literal, Dict, List
-from fastapi import FastAPI
+import streamlit as st
+from typing import Optional, Dict, List, Literal
 from pydantic import BaseModel
 
-app = FastAPI(title="CAPM Investor Classifier")
-
 # -------------------------------
-# Input Schema (all optional except minimal required)
+# Backend logic (from your FastAPI code)
 # -------------------------------
 class Insurance(BaseModel):
     has_health: Optional[bool] = False
@@ -21,16 +19,13 @@ class InvestorInput(BaseModel):
     insurance: Optional[Insurance] = None
     insurance_amount: Optional[int] = None
     dependants: Optional[int] = None
-    risk_attitude: Optional[int] = None  # 1-5
-    investment_knowledge: Optional[int] = None  # 1-5
+    risk_attitude: Optional[int] = None
+    investment_knowledge: Optional[int] = None
     drawdown_reaction: Optional[Literal["sell", "wait", "buy_more"]] = None
     risk_tolerance: Optional[Literal["conservative", "moderate", "aggressive"]] = None
-    time_horizon: Optional[int] = None  # in years
-    return_expectation: Optional[float] = None  # expected return in %
+    time_horizon: Optional[int] = None
+    return_expectation: Optional[float] = None
 
-# -------------------------------
-# Weights
-# -------------------------------
 WEIGHTS = {
     "age": 0.25,
     "financial_stability": 0.30,
@@ -39,9 +34,7 @@ WEIGHTS = {
     "return_expectation": 0.10,
 }
 
-# -------------------------------
-# Helper functions
-# -------------------------------
+# --- Helper functions (same as your FastAPI code) ---
 def get_age_score(age: int) -> float:
     if age <= 25: return 90.0
     if age <= 35: return 75.0
@@ -109,16 +102,14 @@ def get_dependants_score(dependants: Optional[int]) -> Optional[float]:
     if dependants <= 8: return 45.0
     return 30.0
 
-# -------------------------------
-# Classification
-# -------------------------------
+# --- Classification ---
 def classify_investor(data: InvestorInput) -> Dict:
     factors: List[Dict] = []
     score = 0.0
 
     # Age
     age_sub = get_age_score(data.age or 30)
-    factors.append({"name": "age", "subscore": age_sub, "weight": WEIGHTS["age"], "weighted": round(age_sub * WEIGHTS["age"], 2)})
+    factors.append({"name": "age", "subscore": age_sub})
     score += age_sub * WEIGHTS["age"]
 
     # Financial Stability
@@ -127,17 +118,11 @@ def classify_investor(data: InvestorInput) -> Dict:
     monthly_expenses = data.monthly_expenses or 0
     emi_ratio = (monthly_emi / monthly_income * 100) if monthly_income else 100.0
     debt_score = get_debt_score_from_ratio(emi_ratio)
-
     income_score = get_income_score_from_threshold(monthly_income)
-    emergency_ratio = 0.0
-    if data.emergency_fund_amount is not None and monthly_expenses > 0:
-        emergency_ratio = data.emergency_fund_amount / (6 * monthly_expenses)
-    elif data.emergency_fund_months is not None:
-        emergency_ratio = data.emergency_fund_months / 6
+    emergency_ratio = data.emergency_fund_months / 6 if data.emergency_fund_months else 0.0
     emergency_score = get_emergency_score_from_ratio(emergency_ratio)
-
     financial_sub = (income_score + emergency_score + debt_score) / 3
-    factors.append({"name": "financial_stability", "subscore": round(financial_sub, 2), "weight": WEIGHTS["financial_stability"], "weighted": round(financial_sub * WEIGHTS["financial_stability"], 2)})
+    factors.append({"name": "financial_stability", "subscore": round(financial_sub, 2)})
     score += financial_sub * WEIGHTS["financial_stability"]
 
     # Risk Tolerance
@@ -151,17 +136,17 @@ def classify_investor(data: InvestorInput) -> Dict:
         if data.investment_knowledge: risk_subs.append(likert.get(data.investment_knowledge, 60.0))
         if data.drawdown_reaction: risk_subs.append(dd_map.get(data.drawdown_reaction, 60.0))
         risk_tolerance_sub = sum(risk_subs)/len(risk_subs) if risk_subs else 60.0
-    factors.append({"name": "risk_tolerance", "subscore": round(risk_tolerance_sub,2), "weight": WEIGHTS["risk_tolerance"], "weighted": round(risk_tolerance_sub*WEIGHTS["risk_tolerance"],2)})
+    factors.append({"name": "risk_tolerance", "subscore": round(risk_tolerance_sub,2)})
     score += risk_tolerance_sub * WEIGHTS["risk_tolerance"]
 
     # Time Horizon
     time_sub = get_time_horizon_score(data.time_horizon or 5)
-    factors.append({"name": "time_horizon", "subscore": time_sub, "weight": WEIGHTS["time_horizon"], "weighted": round(time_sub*WEIGHTS["time_horizon"],2)})
+    factors.append({"name": "time_horizon", "subscore": time_sub})
     score += time_sub * WEIGHTS["time_horizon"]
 
     # Return Expectation
     return_sub = get_return_expectation_score(data.return_expectation or 10.0)
-    factors.append({"name": "return_expectation", "subscore": return_sub, "weight": WEIGHTS["return_expectation"], "weighted": round(return_sub*WEIGHTS["return_expectation"],2)})
+    factors.append({"name": "return_expectation", "subscore": return_sub})
     score += return_sub * WEIGHTS["return_expectation"]
 
     # Normalize & Profile
@@ -175,27 +160,37 @@ def classify_investor(data: InvestorInput) -> Dict:
 
     recommendation = "invest in equity > debt > gold" if score >= 70 else "invest in debt > equity > gold" if score >= 40 else "invest in debt > gold > equity"
 
-    # Optional insurance
-    insurance_sub = get_insurance_score(data.insurance_amount)
-    if insurance_sub is None and data.insurance:
-        if data.insurance.has_health and data.insurance.has_life: insurance_sub = 80.0
-        elif data.insurance.has_health or data.insurance.has_life: insurance_sub = 50.0
-        else: insurance_sub = 30.0
-    if insurance_sub:
-        factors.append({"name": "insurance", "subscore": insurance_sub, "weight": None, "weighted": None})
-
-    dependants_sub = get_dependants_score(data.dependants)
-    if dependants_sub: factors.append({"name": "dependants", "subscore": dependants_sub, "weight": None, "weighted": None})
-
     return {"score": score, "profile": profile, "recommendation": recommendation, "factors": factors}
 
 # -------------------------------
-# Routes
+# Streamlit UI
 # -------------------------------
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+st.title("CAPM Investor Classifier")
 
-@app.post("/classify")
-def classify(data: InvestorInput):
-    return classify_investor(data)
+age = st.number_input("Age", 18, 100, 30)
+monthly_income = st.number_input("Monthly Income", 0, 10000000, 50000)
+monthly_emi = st.number_input("Monthly EMI", 0, 1000000, 5000)
+monthly_expenses = st.number_input("Monthly Expenses", 0, 1000000, 20000)
+risk_attitude = st.selectbox("Risk Attitude (1-5)", [1,2,3,4,5], index=2)
+investment_knowledge = st.selectbox("Investment Knowledge (1-5)", [1,2,3,4,5], index=2)
+drawdown_reaction = st.selectbox("Drawdown Reaction", ["sell", "wait", "buy_more"], index=1)
+emergency_fund_months = st.number_input("Emergency Fund (Months)", 0.0, 24.0, 6.0)
+time_horizon = st.number_input("Investment Time Horizon (Years)", 1, 50, 5)
+return_expectation = st.number_input("Expected Return (%)", 0.0, 50.0, 10.0)
+
+if st.button("Classify Investor"):
+    data = InvestorInput(
+        age=age,
+        monthly_income=monthly_income,
+        monthly_emi=monthly_emi,
+        monthly_expenses=monthly_expenses,
+        risk_attitude=risk_attitude,
+        investment_knowledge=investment_knowledge,
+        drawdown_reaction=drawdown_reaction,
+        emergency_fund_months=emergency_fund_months,
+        time_horizon=time_horizon,
+        return_expectation=return_expectation
+    )
+    result = classify_investor(data)
+    st.subheader("Investor Classification Result")
+    st.json(result)
